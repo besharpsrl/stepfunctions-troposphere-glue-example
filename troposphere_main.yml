@@ -1,0 +1,234 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Example
+Resources:
+  CleanupDatalakeBucketOnDelete:
+    DependsOn: CustomResourceEmptyDatalakeBucketOnDelete
+    Properties:
+      BucketName:
+        Ref: DatalakeS3Bucket
+      ServiceToken:
+        Fn::GetAtt:
+        - CustomResourceEmptyDatalakeBucketOnDelete
+        - Arn
+    Type: Custom::cleanupbucket
+  Crawler:
+    Properties:
+      DatabaseName:
+        Ref: Db
+      Name: stepfunctions-glue-troposphere-crawler
+      Role:
+        Fn::GetAtt:
+        - CrawlerRole
+        - Arn
+      SchemaChangePolicy:
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+        UpdateBehavior: UPDATE_IN_DATABASE
+      Targets:
+        S3Targets:
+        - Path:
+            Fn::Sub: s3://${DatalakeS3Bucket}/coviddatalake
+    Type: AWS::Glue::Crawler
+  CrawlerRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: glue.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: stepfunctions-glue-troposphere-crawler-rl
+    Type: AWS::IAM::Role
+  CustomResourceEmptyDatalakeBucketOnDelete:
+    Properties:
+      CodeUri: s3://ariticolo-step-func/testpath/a315878ef4af8f8444c3d5d279dd9084
+      Description: Custom Resource Empty DatalakeBucket OnDelete
+      FunctionName: empty-example-s3-bucket-stepfunctions-glue-troposphere
+      Handler: clean_bucket.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - CustomResourceEmptyDatalakeBucketOnDeleteExecutionRole
+        - Arn
+      Runtime: python3.8
+      Timeout: 900
+    Type: AWS::Serverless::Function
+  CustomResourceEmptyDatalakeBucketOnDeleteExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Path: /
+      RoleName: test-stepfunctions-troposphere-glue-empty-bucket-cr-role
+    Type: AWS::IAM::Role
+  DatalakeS3Bucket:
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::AccountId}-test-stepfunctions-troposphere-glue
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: 'true'
+        BlockPublicPolicy: 'true'
+        IgnorePublicAcls: 'true'
+        RestrictPublicBuckets: 'true'
+    Type: AWS::S3::Bucket
+  Db:
+    Properties:
+      CatalogId:
+        Ref: AWS::AccountId
+      DatabaseInput:
+        Description: LAKE_ANALYTIC
+        Name: stepfunctions-glue-troposphere-db
+    Type: AWS::Glue::Database
+  JobsRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: glue.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: stepfunctions-glue-troposphere-jobs-rl
+    Type: AWS::IAM::Role
+  LambdaLGlueCrawlerExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Path: /
+      RoleName: stepfunctions-glue-troposphere-lambda-role
+    Type: AWS::IAM::Role
+  StepfunctionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: states.amazonaws.com
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+      RoleName: test-step-function-rl
+    Type: AWS::IAM::Role
+  checkCrawlerLambda:
+    Properties:
+      CodeUri: s3://ariticolo-step-func/testpath/a42e549584a16d5dd0fff6852a76ac3c
+      Description: check-crawler-status
+      FunctionName: stepfunctions-glue-troposphere-check-lambda
+      Handler: handler.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - LambdaLGlueCrawlerExecutionRole
+        - Arn
+      Runtime: python3.8
+      Timeout: 30
+    Type: AWS::Serverless::Function
+  ingestionStatMachine:
+    Properties:
+      DefinitionString: '{"StartAt": "Import to s3 raw", "States": {"Import to s3
+        raw": {"TimeoutSeconds": 7200, "Comment": "Import database to s3", "Parameters":
+        {"JobName": "${jobName}", "Arguments": {"--s3_external_bucket": "${s3ExternalBucket}",
+        "--s3_internal_bucket": "${s3InternalBucket}", "--enable-glue-datacatalog":
+        "true", "--enable-continuous-cloudwatch-log": "true", "--enable-s3-parquet-optimized-committer":
+        "true", "--job-bookmark-option": "job-bookmark-disable"}}, "Resource": "arn:aws:states:::glue:startJobRun.sync",
+        "Type": "Task", "Next": "Crawl s3 Params", "Retry": [{"ErrorEquals": ["Glue.AWSGlueException"]}],
+        "Catch": [{"ErrorEquals": ["States.TaskFailed"], "Next": "DataImportFailed"}]},
+        "Crawl s3 Params": {"Result": {"crawlerName": "${crawlerName}"}, "Type": "Pass",
+        "Next": "start crawler"}, "start crawler": {"Resource": "${startCrawlerLambda}",
+        "Type": "Task", "Next": "wait for crawler", "Retry": [{"ErrorEquals": ["Lambda.ServiceException",
+        "Lambda.AWSLambdaException", "Lambda.SdkClientException"]}], "Catch": [{"ErrorEquals":
+        ["States.TaskFailed"], "Next": "DataImportFailed"}]}, "wait for crawler":
+        {"Seconds": 20, "Type": "Wait", "Next": "check crawler status"}, "check crawler
+        status": {"Resource": "${checkCrawlerLambda}", "Type": "Task", "Next": "Check
+        finished?", "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException",
+        "Lambda.SdkClientException"]}], "Catch": [{"ErrorEquals": ["States.TaskFailed"],
+        "Next": "DataImportFailed"}]}, "Check finished?": {"Type": "Choice", "Choices":
+        [{"Variable": "$.crawlerStatus", "BooleanEquals": false, "Next": "wait for
+        crawler"}, {"Variable": "$.crawlerStatus", "BooleanEquals": true, "Next":
+        "Finish"}]}, "Finish": {"Type": "Succeed"}, "DataImportFailed": {"Type": "Fail"}}}'
+      DefinitionSubstitutions:
+        checkCrawlerLambda:
+          Fn::GetAtt:
+          - checkCrawlerLambda
+          - Arn
+        crawlerName:
+          Ref: Crawler
+        jobName:
+          Ref: job
+        s3ExternalBucket: s3://covid19-lake/uk_covid/json
+        s3InternalBucket:
+          Fn::Sub: s3://${DatalakeS3Bucket}/coviddatalake
+        startCrawlerLambda:
+          Fn::GetAtt:
+          - startCrawlerLambda
+          - Arn
+      RoleArn:
+        Fn::GetAtt:
+        - StepfunctionRole
+        - Arn
+      StateMachineName: test-stepfunctions-glue
+      StateMachineType: STANDARD
+    Type: AWS::StepFunctions::StateMachine
+  job:
+    Properties:
+      Command:
+        Name: glueetl
+        PythonVersion: '3'
+        ScriptLocation: s3://ariticolo-step-func/testpath/ffa7040d995b89b46925262444a5334a
+      DefaultArguments:
+        --TempDir:
+          Fn::Sub:
+          - s3://${bucket}/temp
+          - bucket:
+              Ref: DatalakeS3Bucket
+        --enable-metrics: ''
+        --job-language: python
+      ExecutionProperty:
+        MaxConcurrentRuns: 1
+      GlueVersion: '2.0'
+      MaxRetries: 0
+      Name: s3-bucket-stepfunctions-glue-troposphere-job
+      NumberOfWorkers: 2
+      Role:
+        Ref: JobsRole
+      Timeout: 300
+      WorkerType: G.1X
+    Type: AWS::Glue::Job
+  startCrawlerLambda:
+    Properties:
+      CodeUri: s3://ariticolo-step-func/testpath/28e1c2d1b465661b01269c7387388472
+      Description: start-crawler
+      FunctionName: stepfunctions-glue-troposphere-start-lambda
+      Handler: handler.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - LambdaLGlueCrawlerExecutionRole
+        - Arn
+      Runtime: python3.8
+      Timeout: 30
+    Type: AWS::Serverless::Function
+Transform: AWS::Serverless-2016-10-31

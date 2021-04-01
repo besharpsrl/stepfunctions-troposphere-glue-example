@@ -1,0 +1,6 @@
+1. Compile to Cloudformation json
+   python troposphere_main.py
+2. Upload lambda and glue code to s3 using md5 hash for cha ge detection:
+   aws cloudformation package --template-file troposphere_main.json --s3-bucket ariticolo-step-func --s3-prefix 'testpath' --output-template-file troposphere_main.yml
+3. Execute Cloudformation
+   aws cloudformation package --template-file troposphere_main.json --s3-bucket ariticolo-step-func --s3-prefix 'testpath' --output-template-file troposphere_main.yml
